@@ -1,0 +1,16 @@
+{
+  "softTestnet": {
+    "name": "IronPear Soft Testnet",
+    "chainId": "ironpear-soft-testnet",
+    "protocolId": "irp-stn",
+    "rpcEndpoint": "wss://rpc-stn.ironpear.org",
+    "ss58Prefix": 42,
+    "tokenSymbol": "PRM",
+    "tokenDecimals": 12,
+    "treasuryAddress": "5EYCAe5hKmw6pHM8AYC52qvuH1n9R7jVA2xX2cTLuBesgHSF",
+    "bootnodes": [
+      "/ip4/162.35.173.123/tcp/30333/p2p/12D3KooWRj8gQxTgzvEFqvv14DpKnbyUQKnf8Y6TMNzsD3VgoCJA",
+      "/ip4/162.245.191.122/tcp/30333/p2p/12D3KooWR7LAdVcPFU1irjuU5tWLkesG6GkBLb1HYNedvvBaX2J7"
+    ]
+  }
+}

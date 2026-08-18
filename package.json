@@ -1,0 +1,26 @@
+{
+  "name": "ironpear-explorer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Read-only IronPear block explorer V1",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w @ironpear-explorer/web",
+    "dev:api": "npm run dev -w @ironpear-explorer/api",
+    "build": "npm run build -w @ironpear-explorer/web && npm run build -w @ironpear-explorer/api && npm run build -w @ironpear-explorer/indexer",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "tsc -b --pretty false",
+    "worker:check": "npm run check -w @ironpear-explorer/api",
+    "d1:migrations:list": "npm run d1:migrations:list -w @ironpear-explorer/api"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

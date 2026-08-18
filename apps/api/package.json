@@ -1,0 +1,24 @@
+{
+  "name": "@ironpear-explorer/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev src/worker.ts --local --persist-to ../../.wrangler/state",
+    "build": "wrangler deploy --dry-run --outdir dist --minify",
+    "check": "wrangler deploy --dry-run --outdir dist --minify",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "d1:migrations:list": "wrangler d1 migrations list ironpear_explorer --local --persist-to ../../.wrangler/state",
+    "d1:migrations:apply:local": "wrangler d1 migrations apply ironpear_explorer --local --persist-to ../../.wrangler/state"
+  },
+  "dependencies": {
+    "@ironpear-explorer/chain": "file:../../packages/chain",
+    "@ironpear-explorer/shared": "file:../../packages/shared"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260818.1",
+    "wrangler": "^4.30.0",
+    "typescript": "^5.5.0"
+  }
+}
