@@ -1,0 +1,59 @@
+name: Deploy IronPear Explorer Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_migrations:
+        description: Apply pending D1 migrations before deploying
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ironpear-explorer-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy-worker:
+    name: Deploy Worker API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build web and Worker artifacts
+        run: npm run build
+
+      - name: Apply D1 migrations
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.apply_migrations }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/api
+          command: d1 migrations apply ironpear_explorer --remote
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/api
+          command: deploy
