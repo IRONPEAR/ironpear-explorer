@@ -60,6 +60,7 @@ h2 {
 
 input {
   flex: 1;
+  min-width: 0;
   border: 0;
   outline: 0;
   color: #edf7ef;

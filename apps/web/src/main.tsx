@@ -94,7 +94,7 @@ function App() {
 
       <form onSubmit={runSearch} className="search">
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search block number, hash, extrinsic hash, or SS58 address" />
-        <button>Search</button>
+        <button type="submit">Search</button>
       </form>
       {message ? <p className="notice">{message}</p> : null}
 
