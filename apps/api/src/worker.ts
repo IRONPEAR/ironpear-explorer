@@ -13,6 +13,7 @@ export default {
 
     try {
       if (url.pathname === '/health') return json({ status: 'ok', service: 'ironpear-explorer-api' });
+      if (url.pathname === '/api/rpc-probe') return json(await nativeRpcProbe(env));
       if (url.pathname === '/api/network') return await rpcJson(client.networkSummary());
       if (url.pathname === '/api/labels') return json({ accounts: PUBLIC_ACCOUNT_LABELS, validators: PUBLIC_VALIDATORS });
       if (url.pathname === '/api/indexer/run-once') return json(await indexFinalizedBatch(env));
@@ -51,6 +52,28 @@ export default {
     ctx.waitUntil(indexFinalizedBatch(env));
   }
 };
+
+async function nativeRpcProbe(env: Env): Promise<Record<string, unknown>> {
+  const endpoint = env.IRONPEAR_RPC_ENDPOINT ?? SOFT_TESTNET_CONFIG.rpcEndpoint;
+  const [systemHealth, header, runtimeVersion] = await Promise.all([
+    nativeRpc(endpoint, 'system_health', []),
+    nativeRpc(endpoint, 'chain_getHeader', []),
+    nativeRpc(endpoint, 'state_getRuntimeVersion', [])
+  ]);
+  return { endpoint, systemHealth, header, runtimeVersion };
+}
+
+async function nativeRpc(endpoint: string, method: string, params: unknown[]): Promise<unknown> {
+  const response = await withTimeout(fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: method, method, params })
+  }), RPC_REQUEST_TIMEOUT_MS, `IronPear RPC ${method} timed out`);
+  if (!response.ok) throw new Error(`IronPear RPC ${method} HTTP ${response.status}`);
+  const payload = await response.json() as { result?: unknown; error?: unknown };
+  if (payload.error) throw new Error(`IronPear RPC ${method} returned an error`);
+  return payload.result;
+}
 
 async function blockResponse(client: IronPearClient, id: string): Promise<Response> {
   try {
