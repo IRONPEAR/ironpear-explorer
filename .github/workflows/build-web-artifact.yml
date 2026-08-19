@@ -42,8 +42,10 @@ jobs:
 
       - name: Verify faucet-address search fix
         run: |
-          grep -F '<button type="submit">Search</button>' apps/web/src/main.tsx
+          grep -F "type=\"submit\" disabled={isSearching || !search.trim()}" apps/web/src/main.tsx
+          grep -F "Searching..." apps/web/src/main.tsx
           grep -F 'min-width: 0;' apps/web/src/styles.css
+          grep -F 'button:active:not(:disabled)' apps/web/src/styles.css
           grep -R -F 'https://api-explorer.ironpear.org' apps/web/dist
 
       - name: Upload static frontend artifact

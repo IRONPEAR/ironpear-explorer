@@ -8,17 +8,29 @@ const apiBase = import.meta.env.VITE_EXPLORER_API_BASE ?? '';
 type SearchResult =
   | { type: 'block'; value: number }
   | { type: 'account'; value: string }
-  | { type: 'extrinsic'; value: unknown }
+  | { type: 'extrinsic'; value: IndexedExtrinsic }
   | { type: 'blockHashOrUnknownHash'; value: string }
   | { type: 'unknown'; value: string };
+
+interface IndexedExtrinsic {
+  hash: string;
+  block_number: number;
+  extrinsic_index: number;
+  section: string;
+  method: string;
+  signer: string | null;
+  success: number | null;
+}
 
 function App() {
   const [network, setNetwork] = React.useState<NetworkSummary | null>(null);
   const [blocks, setBlocks] = React.useState<ExplorerBlock[]>([]);
   const [selectedBlock, setSelectedBlock] = React.useState<ExplorerBlock | null>(null);
   const [selectedAccount, setSelectedAccount] = React.useState<AccountSummary | null>(null);
+  const [selectedExtrinsic, setSelectedExtrinsic] = React.useState<IndexedExtrinsic | null>(null);
   const [search, setSearch] = React.useState('');
   const [message, setMessage] = React.useState<string | null>(null);
+  const [isSearching, setIsSearching] = React.useState(false);
 
   React.useEffect(() => {
     refresh();
@@ -43,10 +55,14 @@ function App() {
     const response = await fetch(`${apiBase}/api/blocks/${encodeURIComponent(String(id))}`);
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'block lookup failed' }));
+      setSelectedBlock(null);
+      setSelectedAccount(null);
+      setSelectedExtrinsic(null);
       setMessage(error.detail ?? error.error ?? 'block lookup failed');
       return;
     }
     setSelectedAccount(null);
+    setSelectedExtrinsic(null);
     setSelectedBlock(await response.json());
   }
 
@@ -55,26 +71,60 @@ function App() {
     const response = await fetch(`${apiBase}/api/accounts/${encodeURIComponent(address)}`);
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'account lookup failed' }));
+      setSelectedBlock(null);
+      setSelectedAccount(null);
+      setSelectedExtrinsic(null);
       setMessage(error.error ?? 'account lookup failed');
       return;
     }
     setSelectedBlock(null);
+    setSelectedExtrinsic(null);
     setSelectedAccount(await response.json());
   }
 
   async function runSearch(event: React.FormEvent) {
     event.preventDefault();
+    if (isSearching) return;
     const term = search.trim();
     if (!term) return;
-    const response = await fetch(`${apiBase}/api/search/${encodeURIComponent(term)}`);
-    const result = (await response.json()) as SearchResult;
-    if (result.type === 'block' || result.type === 'blockHashOrUnknownHash') return loadBlock(result.value);
-    if (result.type === 'account') return loadAccount(result.value);
-    if (result.type === 'extrinsic') {
-      setMessage('Extrinsic lookup is available after the indexer has recorded the transaction.');
-      return;
+    setIsSearching(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`${apiBase}/api/search/${encodeURIComponent(term)}`);
+      if (!response.ok) {
+        setSelectedBlock(null);
+        setSelectedAccount(null);
+        setSelectedExtrinsic(null);
+        setMessage('Search failed. Please try again.');
+        return;
+      }
+      const result = (await response.json()) as SearchResult;
+      if (result.type === 'block' || result.type === 'blockHashOrUnknownHash') {
+        await loadBlock(result.value);
+        return;
+      }
+      if (result.type === 'account') {
+        await loadAccount(result.value);
+        return;
+      }
+      if (result.type === 'extrinsic') {
+        setSelectedBlock(null);
+        setSelectedAccount(null);
+        setSelectedExtrinsic(result.value);
+        return;
+      }
+      setSelectedBlock(null);
+      setSelectedAccount(null);
+      setSelectedExtrinsic(null);
+      setMessage('No block, extrinsic, or account match found.');
+    } catch {
+      setSelectedBlock(null);
+      setSelectedAccount(null);
+      setSelectedExtrinsic(null);
+      setMessage('Search failed. Please check the value and try again.');
+    } finally {
+      setIsSearching(false);
     }
-    setMessage('No block, extrinsic, or account match found.');
   }
 
   return (
@@ -92,11 +142,14 @@ function App() {
         <Metric label="Total issuance" value={formatPlanck(network?.totalIssuancePlanck, network?.tokenDecimals, network?.tokenSymbol)} />
       </section>
 
-      <form onSubmit={runSearch} className="search">
+      <form onSubmit={runSearch} className="search" aria-busy={isSearching}>
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search block number, hash, extrinsic hash, or SS58 address" />
-        <button type="submit">Search</button>
+        <button type="submit" disabled={isSearching || !search.trim()}>{isSearching ? 'Searching...' : 'Search'}</button>
       </form>
-      {message ? <p className="notice">{message}</p> : null}
+      {message ? <p className="notice" aria-live="polite">{message}</p> : null}
+      {selectedBlock ? <BlockDetails block={selectedBlock} network={network} /> : null}
+      {selectedAccount ? <AccountDetails account={selectedAccount} network={network} /> : null}
+      {selectedExtrinsic ? <ExtrinsicDetails extrinsic={selectedExtrinsic} /> : null}
 
       <section className="panel">
         <h2>Network</h2>
@@ -123,9 +176,6 @@ function App() {
           ))}
         </div>
       </section>
-
-      {selectedBlock ? <BlockDetails block={selectedBlock} network={network} /> : null}
-      {selectedAccount ? <AccountDetails account={selectedAccount} network={network} /> : null}
     </main>
   );
 }
@@ -161,6 +211,22 @@ function AccountDetails({ account, network }: { account: AccountSummary; network
         <dt>Free</dt><dd>{formatPlanck(account.freePlanck, network?.tokenDecimals, network?.tokenSymbol)}</dd>
         <dt>Reserved</dt><dd>{formatPlanck(account.reservedPlanck, network?.tokenDecimals, network?.tokenSymbol)}</dd>
         <dt>Nonce</dt><dd>{account.nonce}</dd>
+      </dl>
+    </section>
+  );
+}
+
+function ExtrinsicDetails({ extrinsic }: { extrinsic: IndexedExtrinsic }) {
+  return (
+    <section className="panel">
+      <h2>Extrinsic</h2>
+      <dl>
+        <dt>Hash</dt><dd>{extrinsic.hash}</dd>
+        <dt>Block</dt><dd>#{extrinsic.block_number}</dd>
+        <dt>Index</dt><dd>{extrinsic.extrinsic_index}</dd>
+        <dt>Call</dt><dd>{extrinsic.section}.{extrinsic.method}</dd>
+        <dt>Signer</dt><dd>{extrinsic.signer ?? 'unsigned'}</dd>
+        <dt>Status</dt><dd>{extrinsic.success === null ? 'unknown' : extrinsic.success ? 'success' : 'failed'}</dd>
       </dl>
     </section>
   );
