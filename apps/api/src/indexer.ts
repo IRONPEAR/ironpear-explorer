@@ -6,10 +6,7 @@ export async function indexFinalizedBatch(env: Env): Promise<{ indexed: number; 
   const client = new IronPearClient(env.IRONPEAR_RPC_ENDPOINT);
   const limit = boundedBatchLimit(env.INDEX_BATCH_LIMIT);
   try {
-    const api = await client.api();
-    const finalizedHash = await api.rpc.chain.getFinalizedHead();
-    const finalizedHeader = await api.rpc.chain.getHeader(finalizedHash);
-    const finalized = finalizedHeader.number.toNumber();
+    const finalized = (await client.networkSummary()).finalizedBlock;
     const current = await lastIndexedBlock(env.DB);
     const from = current + 1;
     const to = Math.min(finalized, from + limit - 1);
@@ -63,7 +60,7 @@ async function writeBlock(db: D1Database, block: Awaited<ReturnType<IronPearClie
 }
 
 function boundedBatchLimit(value: string | undefined): number {
-  const parsed = Number(value ?? '5');
-  if (!Number.isInteger(parsed) || parsed < 1) return 5;
+  const parsed = Number(value ?? '10');
+  if (!Number.isInteger(parsed) || parsed < 1) return 10;
   return Math.min(parsed, 10);
 }

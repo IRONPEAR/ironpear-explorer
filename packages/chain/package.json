@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@ironpear-explorer/shared": "file:../shared",
-    "@polkadot/api": "^15.0.1",
     "@polkadot/util-crypto": "^13.0.2"
   },
   "devDependencies": {

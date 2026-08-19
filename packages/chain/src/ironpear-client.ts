@@ -1,5 +1,4 @@
-import { ApiPromise, HttpProvider } from '@polkadot/api';
-import { encodeAddress } from '@polkadot/util-crypto';
+import { blake2AsHex, decodeAddress, encodeAddress, xxhashAsHex } from '@polkadot/util-crypto';
 import type {
   AccountSummary,
   BlockFee,
@@ -14,47 +13,45 @@ import type {
 import { PUBLIC_ACCOUNT_LABELS } from './labels.js';
 import { SOFT_TESTNET_CONFIG } from './network-config.js';
 
-export class IronPearClient {
-  private apiPromise: Promise<ApiPromise> | null = null;
+interface RpcHeader {
+  parentHash: HexString;
+  number: string;
+  stateRoot: HexString;
+  extrinsicsRoot: HexString;
+}
 
+interface RpcSignedBlock {
+  block: {
+    header: RpcHeader;
+    extrinsics: HexString[];
+  };
+}
+
+export class IronPearClient {
   constructor(
     private readonly endpoint = SOFT_TESTNET_CONFIG.rpcEndpoint,
     private readonly timeoutMs = 10_000
   ) {}
 
-  async api(): Promise<ApiPromise> {
-    if (!this.apiPromise) {
-      const provider = new HttpProvider(this.endpoint);
-      this.apiPromise = withTimeout(ApiPromise.create({ provider, noInitWarn: true }), this.timeoutMs, 'IronPear RPC connection timed out');
-    }
-    return this.apiPromise;
+  async api(): Promise<never> {
+    throw new Error('IronPear Explorer uses direct HTTP JSON-RPC in Cloudflare Workers');
   }
 
   async disconnect(): Promise<void> {
-    if (!this.apiPromise) return;
-    try {
-      const api = await withTimeout(this.apiPromise, 1_000, 'IronPear RPC disconnect timed out');
-      await api.disconnect();
-    } catch {
-      // A timed-out API creation cannot be cleanly disconnected. Drop the reference so the request can finish.
-    } finally {
-      this.apiPromise = null;
-    }
+    return;
   }
 
   async networkSummary(): Promise<NetworkSummary> {
-    const api = await this.api();
-    const query = api.query as any;
-    const [bestHeader, finalizedHash, totalIssuance, treasuryAccount] = await Promise.all([
-      api.rpc.chain.getHeader(),
-      api.rpc.chain.getFinalizedHead(),
-      query.balances.totalIssuance(),
-      query.system.account(SOFT_TESTNET_CONFIG.treasuryAddress)
+    const [bestHeader, finalizedHash, totalIssuanceStorage, treasuryStorage] = await Promise.all([
+      this.rpc<RpcHeader>('chain_getHeader'),
+      this.rpc<HexString>('chain_getFinalizedHead'),
+      this.rpc<HexString | null>('state_getStorage', [storageKey('Balances', 'TotalIssuance')]),
+      this.rpc<HexString | null>('state_getStorage', [mapStorageKey('System', 'Account', decodeAddress(SOFT_TESTNET_CONFIG.treasuryAddress))])
     ]);
-    const finalizedHeader = await api.rpc.chain.getHeader(finalizedHash);
-    const bestBlock = bestHeader.number.toNumber();
-    const finalizedBlock = finalizedHeader.number.toNumber();
-    const treasuryBalance = (treasuryAccount as any).data.free.toString();
+    const finalizedHeader = await this.rpc<RpcHeader>('chain_getHeader', [finalizedHash]);
+    const bestBlock = hexNumber(bestHeader.number);
+    const finalizedBlock = hexNumber(finalizedHeader.number);
+    const treasuryAccount = decodeAccountInfo(treasuryStorage);
 
     return {
       name: SOFT_TESTNET_CONFIG.name,
@@ -66,29 +63,28 @@ export class IronPearClient {
       bestBlock,
       finalizedBlock,
       finalityGap: bestBlock - finalizedBlock,
-      totalIssuancePlanck: totalIssuance.toString(),
+      totalIssuancePlanck: decodeU128(totalIssuanceStorage).toString(),
       treasuryAddress: SOFT_TESTNET_CONFIG.treasuryAddress,
-      treasuryBalancePlanck: treasuryBalance
+      treasuryBalancePlanck: treasuryAccount.freePlanck
     };
   }
 
   async accountSummary(address: string): Promise<AccountSummary> {
-    const api = await this.api();
-    const account = await (api.query as any).system.account(address);
-    const data = (account as any).data;
+    const normalized = normalizeAddress(address);
+    const storage = await this.rpc<HexString | null>('state_getStorage', [mapStorageKey('System', 'Account', decodeAddress(normalized))]);
+    const account = decodeAccountInfo(storage);
     return {
-      address,
-      label: PUBLIC_ACCOUNT_LABELS[address] ?? null,
-      freePlanck: data.free.toString(),
-      reservedPlanck: data.reserved.toString(),
-      nonce: (account as any).nonce.toNumber()
+      address: normalized,
+      label: PUBLIC_ACCOUNT_LABELS[normalized] ?? null,
+      freePlanck: account.freePlanck,
+      reservedPlanck: account.reservedPlanck,
+      nonce: account.nonce
     };
   }
 
   async latestBlocks(limit = 10): Promise<ExplorerBlock[]> {
-    const api = await this.api();
-    const header = await api.rpc.chain.getHeader();
-    const best = header.number.toNumber();
+    const header = await this.rpc<RpcHeader>('chain_getHeader');
+    const best = hexNumber(header.number);
     const start = Math.max(0, best - Math.max(1, Math.min(limit, 50)) + 1);
     const blocks: ExplorerBlock[] = [];
     for (let number = best; number >= start; number -= 1) {
@@ -98,129 +94,120 @@ export class IronPearClient {
   }
 
   async blockByNumber(number: number): Promise<ExplorerBlock> {
-    const api = await this.api();
-    const hash = await api.rpc.chain.getBlockHash(number);
-    return this.blockByHash(hash.toHex() as HexString);
+    const hash = await this.rpc<HexString>('chain_getBlockHash', [numberToHex(number)]);
+    return this.blockByHash(hash);
   }
 
   async blockByHash(hash: HexString): Promise<ExplorerBlock> {
-    const api = await this.api();
-    const query = api.query as any;
-    const [signedBlock, events, timestampNow, finalizedHash] = await Promise.all([
-      api.rpc.chain.getBlock(hash),
-      query.system.events.at(hash),
-      query.timestamp.now.at(hash),
-      api.rpc.chain.getFinalizedHead()
+    const [signedBlock, timestampStorage, finalizedHash] = await Promise.all([
+      this.rpc<RpcSignedBlock>('chain_getBlock', [hash]),
+      this.rpc<HexString | null>('state_getStorage', [storageKey('Timestamp', 'Now'), hash]),
+      this.rpc<HexString>('chain_getFinalizedHead')
     ]);
-    const finalizedHeader = await api.rpc.chain.getHeader(finalizedHash);
+    const finalizedHeader = await this.rpc<RpcHeader>('chain_getHeader', [finalizedHash]);
     const header = signedBlock.block.header;
-    const blockNumber = header.number.toNumber();
-    const explorerEvents = decodeEvents(events as any);
-    const extrinsics = decodeExtrinsics(signedBlock.block.extrinsics as any, explorerEvents);
+    const blockNumber = hexNumber(header.number);
+    const extrinsics = signedBlock.block.extrinsics.map((encoded, index) => decodeExtrinsic(encoded, index));
 
     return {
       number: blockNumber,
-      hash: header.hash.toHex() as HexString,
-      parentHash: header.parentHash.toHex() as HexString,
-      timestamp: timestampNow.toString(),
-      finalized: blockNumber <= finalizedHeader.number.toNumber(),
-      author: findRewardAuthor(explorerEvents),
+      hash,
+      parentHash: header.parentHash,
+      timestamp: decodeU64(timestampStorage)?.toString() ?? null,
+      finalized: blockNumber <= hexNumber(finalizedHeader.number),
+      author: null,
       extrinsics,
-      events: explorerEvents,
-      transfers: findTransfers(explorerEvents),
-      fees: findFees(explorerEvents),
-      rewards: findRewards(explorerEvents)
+      events: [],
+      transfers: [],
+      fees: [],
+      rewards: []
     };
   }
-}
 
-function decodeEvents(records: any[]): ExplorerEvent[] {
-  return records.map((record, eventIndex) => ({
-    eventIndex,
-    section: record.event.section,
-    method: record.event.method,
-    phase: record.phase?.toString?.() ?? null,
-    data: record.event.data.map((item: unknown) => JSON.parse(JSON.stringify(item)))
-  }));
-}
-
-function decodeExtrinsics(extrinsics: any[], events: ExplorerEvent[]): ExplorerExtrinsic[] {
-  return extrinsics.map((extrinsic, index) => ({
-    index,
-    hash: extrinsic.hash.toHex(),
-    section: extrinsic.method.section,
-    method: extrinsic.method.method,
-    signer: extrinsic.isSigned ? extrinsic.signer.toString() : null,
-    isSigned: extrinsic.isSigned,
-    success: extrinsicSuccess(index, events)
-  }));
-}
-
-function extrinsicSuccess(index: number, events: ExplorerEvent[]): boolean | null {
-  let status: boolean | null = null;
-  for (const event of events) {
-    if (event.section === 'system' && event.method === 'ExtrinsicSuccess' && eventAppliesToExtrinsic(event, index)) {
-      status = true;
-    }
-    if (event.section === 'system' && event.method === 'ExtrinsicFailed' && eventAppliesToExtrinsic(event, index)) {
-      status = false;
-    }
+  private async rpc<T>(method: string, params: unknown[] = []): Promise<T> {
+    const response = await withTimeout(fetch(this.endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: method, method, params })
+    }), this.timeoutMs, `IronPear RPC ${method} timed out`);
+    if (!response.ok) throw new Error(`IronPear RPC ${method} HTTP ${response.status}`);
+    const payload = await response.json() as { result?: T; error?: unknown };
+    if (payload.error) throw new Error(`IronPear RPC ${method} returned an error`);
+    return payload.result as T;
   }
-  return status;
 }
 
-function eventAppliesToExtrinsic(event: ExplorerEvent, index: number): boolean {
-  return event.phase === `ApplyExtrinsic(${index})` || event.phase === `applyExtrinsic(${index})` || event.phase === `{\"applyExtrinsic\":${index}}`;
+function decodeExtrinsic(encoded: HexString, index: number): ExplorerExtrinsic {
+  return {
+    index,
+    hash: blake2AsHex(encoded, 256) as HexString,
+    section: 'encoded',
+    method: 'opaque',
+    signer: null,
+    isSigned: false,
+    success: null
+  };
 }
 
-function findTimestamp(events: ExplorerEvent[]): string | null {
-  const event = events.find((item) => item.section === 'timestamp' && item.method === 'Set');
-  return event ? String(event.data[0]) : null;
+function storageKey(pallet: string, item: string): HexString {
+  return `${xxhashAsHex(pallet, 128)}${xxhashAsHex(item, 128).slice(2)}` as HexString;
 }
 
-function findRewardAuthor(events: ExplorerEvent[]): string | null {
-  const event = events.find((item) => item.section === 'validatorRewards' && item.method === 'ValidatorBlockAuthoredObserved');
-  const author = event?.data[0];
-  return typeof author === 'string' ? author : null;
+function mapStorageKey(pallet: string, item: string, account: Uint8Array): HexString {
+  return `${storageKey(pallet, item)}${blake2AsHex(account, 128).slice(2)}${bytesToHex(account).slice(2)}` as HexString;
 }
 
-function findTransfers(events: ExplorerEvent[]): BlockTransfer[] {
-  return events
-    .filter((event) => event.section === 'balances' && event.method === 'Transfer')
-    .map((event) => ({
-      eventIndex: event.eventIndex,
-      from: String(event.data[0]),
-      to: String(event.data[1]),
-      amountPlanck: String(event.data[2])
-    }));
+function decodeAccountInfo(storage: HexString | null): { nonce: number; freePlanck: string; reservedPlanck: string } {
+  if (!storage) return { nonce: 0, freePlanck: '0', reservedPlanck: '0' };
+  const bytes = hexToBytes(storage);
+  return {
+    nonce: readU32(bytes, 0),
+    freePlanck: readU128(bytes, 16).toString(),
+    reservedPlanck: readU128(bytes, 32).toString()
+  };
 }
 
-function findFees(events: ExplorerEvent[]): BlockFee[] {
-  return events
-    .filter((event) => event.section === 'transactionPayment' && event.method === 'TransactionFeePaid')
-    .map((event) => ({
-      eventIndex: event.eventIndex,
-      payer: String(event.data[0]),
-      actualFeePlanck: String(event.data[1]),
-      tipPlanck: String(event.data[2] ?? '0')
-    }));
+function decodeU128(storage: HexString | null): bigint {
+  if (!storage) return 0n;
+  return readU128(hexToBytes(storage), 0);
 }
 
-function findRewards(events: ExplorerEvent[]): BlockReward[] {
-  return events
-    .filter((event) => event.section === 'validatorRewards' && event.method.toLowerCase().includes('reward'))
-    .map((event) => ({
-      eventIndex: event.eventIndex,
-      account: String(event.data[0] ?? ''),
-      amountPlanck: String(event.data[1] ?? '0'),
-      event: `${event.section}.${event.method}`
-    }));
+function decodeU64(storage: HexString | null): bigint | null {
+  if (!storage) return null;
+  const bytes = hexToBytes(storage);
+  let value = 0n;
+  for (let i = 7; i >= 0; i -= 1) value = (value << 8n) + BigInt(bytes[i] ?? 0);
+  return value;
 }
 
-export function normalizeAddress(address: string, ss58Prefix = SOFT_TESTNET_CONFIG.ss58Prefix): string {
-  return encodeAddress(address, ss58Prefix);
+function readU32(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] ?? 0) + ((bytes[offset + 1] ?? 0) << 8) + ((bytes[offset + 2] ?? 0) << 16) + ((bytes[offset + 3] ?? 0) << 24);
 }
 
+function readU128(bytes: Uint8Array, offset: number): bigint {
+  let value = 0n;
+  for (let i = 15; i >= 0; i -= 1) value = (value << 8n) + BigInt(bytes[offset + i] ?? 0);
+  return value;
+}
+
+function hexNumber(value: string): number {
+  return Number.parseInt(value, 16);
+}
+
+function numberToHex(value: number): string {
+  return `0x${value.toString(16)}`;
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = Number.parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): HexString {
+  return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -234,4 +221,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+export function normalizeAddress(address: string, ss58Prefix = SOFT_TESTNET_CONFIG.ss58Prefix): string {
+  return encodeAddress(address, ss58Prefix);
 }
