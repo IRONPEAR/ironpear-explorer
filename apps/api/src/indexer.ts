@@ -8,7 +8,7 @@ export async function indexFinalizedBatch(env: Env): Promise<{ indexed: number; 
   try {
     const finalized = (await client.networkSummary()).finalizedBlock;
     const current = await lastIndexedBlock(env.DB);
-    const from = current + 1;
+    const from = current > 0 ? current + 1 : Math.max(1, finalized - limit + 1);
     const to = Math.min(finalized, from + limit - 1);
 
     if (from > to) return { indexed: 0, from: null, to: null, finalized };
