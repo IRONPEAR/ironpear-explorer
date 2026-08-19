@@ -14,7 +14,7 @@ export const SOFT_TESTNET_CONFIG: IronPearNetworkConfig = {
   name: 'IronPear Soft Testnet',
   chainId: 'ironpear-soft-testnet',
   protocolId: 'irp-stn',
-  rpcEndpoint: 'wss://rpc-stn.ironpear.org',
+  rpcEndpoint: 'https://rpc-stn.ironpear.org',
   ss58Prefix: 42,
   tokenSymbol: 'PRM',
   tokenDecimals: 12,

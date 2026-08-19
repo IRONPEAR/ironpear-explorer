@@ -3,6 +3,8 @@ import { accountHistory, extrinsicByHash } from './d1.js';
 import { indexFinalizedBatch } from './indexer.js';
 import type { Env } from './types.js';
 
+const RPC_REQUEST_TIMEOUT_MS = 12_000;
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
@@ -11,14 +13,14 @@ export default {
 
     try {
       if (url.pathname === '/health') return json({ status: 'ok', service: 'ironpear-explorer-api' });
-      if (url.pathname === '/api/network') return json(await client.networkSummary());
+      if (url.pathname === '/api/network') return await rpcJson(client.networkSummary());
       if (url.pathname === '/api/labels') return json({ accounts: PUBLIC_ACCOUNT_LABELS, validators: PUBLIC_VALIDATORS });
       if (url.pathname === '/api/indexer/run-once') return json(await indexFinalizedBatch(env));
 
       const latestMatch = url.pathname.match(/^\/api\/blocks\/latest$/);
       if (latestMatch) {
         const limit = Number(url.searchParams.get('limit') ?? '10');
-        return json(await client.latestBlocks(Number.isFinite(limit) ? limit : 10));
+        return await rpcJson(client.latestBlocks(Number.isFinite(limit) ? limit : 10));
       }
 
       const blockMatch = url.pathname.match(/^\/api\/blocks\/([^/]+)$/);
@@ -37,6 +39,9 @@ export default {
       if (searchMatch?.[1]) return await searchResponse(env.DB, decodeURIComponent(searchMatch[1]));
 
       return json({ error: 'not found' }, 404);
+    } catch (error) {
+      if (isRpcFailure(error)) return json({ error: 'IronPear RPC unavailable', detail: messageFor(error) }, 502);
+      throw error;
     } finally {
       await client.disconnect();
     }
@@ -49,9 +54,9 @@ export default {
 
 async function blockResponse(client: IronPearClient, id: string): Promise<Response> {
   try {
-    if (/^0x[0-9a-fA-F]{64}$/.test(id)) return json(await client.blockByHash(id as `0x${string}`));
+    if (/^0x[0-9a-fA-F]{64}$/.test(id)) return await rpcJson(client.blockByHash(id as `0x${string}`));
     const number = Number(id);
-    if (Number.isInteger(number) && number >= 0) return json(await client.blockByNumber(number));
+    if (Number.isInteger(number) && number >= 0) return await rpcJson(client.blockByNumber(number));
     return json({ error: 'block id must be a number or 32-byte hash' }, 400);
   } catch {
     return json({
@@ -64,7 +69,7 @@ async function blockResponse(client: IronPearClient, id: string): Promise<Respon
 async function accountResponse(client: IronPearClient, db: D1Database, address: string): Promise<Response> {
   try {
     const normalized = normalizeAddress(address);
-    const summary = await client.accountSummary(normalized);
+    const summary = await withTimeout(client.accountSummary(normalized), RPC_REQUEST_TIMEOUT_MS, 'IronPear RPC request timed out');
     const history = await accountHistory(db, normalized, 50);
     return json({ ...summary, history });
   } catch {
@@ -93,4 +98,36 @@ function json(value: unknown, status = 200): Response {
       'cache-control': 'no-store'
     }
   });
+}
+
+
+async function rpcJson<T>(promise: Promise<T>): Promise<Response> {
+  try {
+    return json(await withTimeout(promise, RPC_REQUEST_TIMEOUT_MS, 'IronPear RPC request timed out'));
+  } catch (error) {
+    if (isRpcFailure(error)) return json({ error: 'IronPear RPC unavailable', detail: messageFor(error) }, 502);
+    throw error;
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isRpcFailure(error: unknown): boolean {
+  return error instanceof Error && /rpc|provider|timeout|fetch|network|connection/i.test(error.message);
+}
+
+function messageFor(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown RPC failure';
 }

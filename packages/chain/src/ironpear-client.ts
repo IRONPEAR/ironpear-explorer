@@ -1,4 +1,4 @@
-import { ApiPromise, WsProvider } from '@polkadot/api';
+import { ApiPromise, HttpProvider } from '@polkadot/api';
 import { encodeAddress } from '@polkadot/util-crypto';
 import type {
   AccountSummary,
@@ -17,20 +17,27 @@ import { SOFT_TESTNET_CONFIG } from './network-config.js';
 export class IronPearClient {
   private apiPromise: Promise<ApiPromise> | null = null;
 
-  constructor(private readonly endpoint = SOFT_TESTNET_CONFIG.rpcEndpoint) {}
+  constructor(
+    private readonly endpoint = SOFT_TESTNET_CONFIG.rpcEndpoint,
+    private readonly timeoutMs = 10_000
+  ) {}
 
   async api(): Promise<ApiPromise> {
     if (!this.apiPromise) {
-      const provider = new WsProvider(this.endpoint);
-      this.apiPromise = ApiPromise.create({ provider, noInitWarn: true });
+      const provider = new HttpProvider(this.endpoint);
+      this.apiPromise = withTimeout(ApiPromise.create({ provider, noInitWarn: true }), this.timeoutMs, 'IronPear RPC connection timed out');
     }
     return this.apiPromise;
   }
 
   async disconnect(): Promise<void> {
-    if (this.apiPromise) {
-      const api = await this.apiPromise;
+    if (!this.apiPromise) return;
+    try {
+      const api = await withTimeout(this.apiPromise, 1_000, 'IronPear RPC disconnect timed out');
       await api.disconnect();
+    } catch {
+      // A timed-out API creation cannot be cleanly disconnected. Drop the reference so the request can finish.
+    } finally {
       this.apiPromise = null;
     }
   }
@@ -212,4 +219,19 @@ function findRewards(events: ExplorerEvent[]): BlockReward[] {
 
 export function normalizeAddress(address: string, ss58Prefix = SOFT_TESTNET_CONFIG.ss58Prefix): string {
   return encodeAddress(address, ss58Prefix);
+}
+
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

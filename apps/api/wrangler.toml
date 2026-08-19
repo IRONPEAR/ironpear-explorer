@@ -5,7 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
 [vars]
-IRONPEAR_RPC_ENDPOINT = "wss://rpc-stn.ironpear.org"
+IRONPEAR_RPC_ENDPOINT = "https://rpc-stn.ironpear.org"
 INDEX_BATCH_LIMIT = "10"
 
 [[d1_databases]]
