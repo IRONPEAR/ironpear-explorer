@@ -1,0 +1,49 @@
+name: Deploy IronPear Explorer Web Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: GitHub Actions run ID containing the verified web artifact
+        required: true
+        default: "32253461354"
+      artifact_name:
+        description: Verified web artifact name
+        required: true
+        default: ironpear-explorer-web-dist-9a4303f748c5a93db537522acaac631ec63c5091
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy-web:
+    name: Deploy frontend static assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout deployment config
+        uses: actions/checkout@v4
+
+      - name: Download verified frontend artifact
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.artifact_run_id }}
+          name: ${{ inputs.artifact_name }}
+          path: apps/web/dist
+          github-token: ${{ github.token }}
+
+      - name: Verify downloaded frontend artifact
+        run: |
+          test -f apps/web/dist/index.html
+          grep -R -F 'https://api-explorer.ironpear.org' apps/web/dist
+          grep -R -F 'Search' apps/web/dist
+
+      - name: Deploy existing frontend Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/web
+          command: deploy

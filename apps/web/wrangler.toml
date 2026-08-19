@@ -1,0 +1,11 @@
+name = "falling-tree-2a19"
+compatibility_date = "2026-08-19"
+workers_dev = false
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
+
+[[routes]]
+pattern = "explorer.ironpear.org"
+custom_domain = true
