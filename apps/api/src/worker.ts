@@ -7,6 +7,7 @@ const RPC_REQUEST_TIMEOUT_MS = 12_000;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
     if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
     const url = new URL(request.url);
     const client = new IronPearClient(env.IRONPEAR_RPC_ENDPOINT ?? SOFT_TESTNET_CONFIG.rpcEndpoint);
@@ -93,10 +94,19 @@ function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: {
+      ...corsHeaders(),
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store'
     }
   });
+}
+
+function corsHeaders(): HeadersInit {
+  return {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, OPTIONS',
+    'access-control-allow-headers': 'Content-Type'
+  };
 }
 
 
