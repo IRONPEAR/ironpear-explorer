@@ -16,3 +16,7 @@ migrations_dir = "migrations"
 
 [triggers]
 crons = ["* * * * *"]
+
+[[routes]]
+pattern = "api-explorer.ironpear.org"
+custom_domain = true
